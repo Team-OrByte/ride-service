@@ -1,42 +1,64 @@
+import ride_service.bike_service_client as bsc;
+import ride_service.repository;
+import ride_service.user_service_client as usc;
+import ride_service.event_handler;
+
 import ballerina/http;
+import ballerina/log;
 import ballerina/time;
+import ballerina/uuid;
 
-public type Country record {
-    string name;
-    string continent;
-    int population;
-    decimal gdp;
-    decimal area;
-};
+configurable int PORT = ?;
 
-type RideRequest readonly & record {|
-    string bike_id;
-    string user_id;
-    string start_time;
-    string start_station;
-|};
+service / on new http:Listener(PORT) {
 
-final http:Client countriesClient = check new ("https://dev-tools.wso2.com/gs/helpers/v1.0/");
-final Client sClient = check new ();
+    function init() {
+        log:printInfo(`The Ride Service Initiated on Port: ${PORT}`);
+    }
 
-service / on new http:Listener(8080) {
+    resource function post startRide(http:RequestContext ctx, string bikeId) returns http:Accepted|http:BadRequest|error {
+        string userId = "user-001"; // Assumes we get use ID with http header or user service
+        boolean isCapable = check usc:userCapability(userId);
+        if isCapable is false {
+            return <http:BadRequest>{
+                body: {
+                    message: "User is not capable at the moment."
+                }
+            };
+        }
 
-    resource function post ride() returns string[]|error {
-        RideInsert rideInsert = {
-            "ride_id": "ride-12345",
-            "user_id": "user-12345",
-            "bike_id": "bike-67890",
-            "start_time": time:utcNow(),
-            "end_time": time:utcNow(),
-            "status": RESERVED,
-            "distance": 4.8,
-            "duration": 25,
-            "start_location": "Zone-A",
-            "end_location": "Zone-B",
-            "price": 36.75
+        string rideId = uuid:createType4AsString();
+        boolean isSuccess = check bsc:reserveBike(bikeId, userId, rideId);
+        if isSuccess is false {
+            return <http:BadRequest>{
+                body: {
+                    message: "Bike is not available at the moment."
+                }
+            };
+        }
+
+        repository:RideInsert newRide = {
+            bike_id: bikeId,
+            ride_id: rideId,
+            user_id: userId,
+            start_time: time:utcNow(),
+            end_time: (),
+            duration: 0,
+            distance: 0.0,
+            start_location: "START",
+            end_location: "END",
+            status: "RESERVED",
+            price: 0
         };
-        string[]|error success = sClient->/rides.post([rideInsert]);
+        _ = check repository:insertRide(newRide);
 
-        return success;
+        check event_handler:produce(newRide);
+
+        return <http:Accepted>{
+            body: {
+                message: "You can start the ride.",
+                rideId: rideId
+            }
+        };
     }
 }
