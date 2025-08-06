@@ -7,15 +7,15 @@ type Ride record {|
     readonly string ride_id;
     string user_id;
     string bike_id;
-    time:Utc start_time;
+    time:Utc? start_time;
     time:Utc? end_time;
     Status status;
-    float distance;
-    int duration;
+    float? distance;
+    int? duration;
     string start_location;
-    string end_location;
+    string? end_location;
     @sql:Decimal {precision: [10, 2]}
-    decimal price;
+    decimal? price;
 |};
 
 enum Status {
