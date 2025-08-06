@@ -8,7 +8,7 @@ type Ride record {|
     string user_id;
     string bike_id;
     time:Utc start_time;
-    time:Utc end_time;
+    time:Utc? end_time;
     Status status;
     float distance;
     int duration;

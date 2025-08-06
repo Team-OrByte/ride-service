@@ -1,18 +1,51 @@
 version: '3.8'
 
 services:
+
   postgres:
     image: postgres:15
     container_name: ride_service_postgres
     restart: always
     environment:
-      POSTGRES_USER: ride_user
-      POSTGRES_PASSWORD: ride_pass
-      POSTGRES_DB: ride_service_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ride_network
+  
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: kafka
+    restart: always
+    ports:
+      - "9094:9094"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    environment:
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    networks:
+      - ride_network
 
 volumes:
   postgres_data:
+  zookeeper_data:
+  kafka_data:
+
+networks:
+  ride_network:
+    driver: bridge
