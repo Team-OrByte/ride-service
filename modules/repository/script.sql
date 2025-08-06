@@ -9,14 +9,14 @@ CREATE TABLE "ride" (
 	"ride_id" VARCHAR(191) NOT NULL,
 	"user_id" VARCHAR(191) NOT NULL,
 	"bike_id" VARCHAR(191) NOT NULL,
-	"start_time" TIMESTAMP NOT NULL,
+	"start_time" TIMESTAMP,
 	"end_time" TIMESTAMP,
 	"status" VARCHAR(11) CHECK ("status" IN ('RESERVED', 'IN_PROGRESS', 'PAUSED', 'ENDED')) NOT NULL,
-	"distance" FLOAT NOT NULL,
-	"duration" INT NOT NULL,
+	"distance" FLOAT,
+	"duration" INT,
 	"start_location" VARCHAR(191) NOT NULL,
-	"end_location" VARCHAR(191) NOT NULL,
-	"price" DECIMAL(10,2) NOT NULL,
+	"end_location" VARCHAR(191),
+	"price" DECIMAL(10,2),
 	PRIMARY KEY("ride_id")
 );
 

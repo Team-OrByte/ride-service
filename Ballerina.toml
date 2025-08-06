@@ -8,13 +8,6 @@ distribution = "2201.12.7"
 observabilityIncluded = true
 cloud = "docker"
 
-[[tool.persist]]
-id = "generate-db-client"
-targetModule = "ride_service.repository"
-options.datastore = "postgresql"
-options.testDataStore = "h2"
-filePath = "persist/model.bal"
-
 [[platform.java21.dependency]]
 groupId = "io.ballerina.stdlib"
 artifactId = "persist.sql-native"
