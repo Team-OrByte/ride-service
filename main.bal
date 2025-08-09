@@ -22,9 +22,7 @@ service / on new http:Listener(PORT) {
         boolean isCapable = check usc:userCapability(userId);
         if isCapable is false {
             return <http:BadRequest>{
-                body: {
-                    message: "User is not capable at the moment."
-                }
+                body: types:USER_NOT_CAPABLE
             };
         }
 
@@ -32,9 +30,7 @@ service / on new http:Listener(PORT) {
         boolean isSuccess = check bsc:reserveBike(bikeId, userId, rideId);
         if isSuccess is false {
             return <http:BadRequest>{
-                body: {
-                    message: "Bike is not available at the moment."
-                }
+                body: types:BIKE_NOT_AVAILABLE
             };
         }
 
@@ -98,5 +94,83 @@ service / on new http:Listener(PORT) {
 
         log:printInfo(`Ride ${rideId} started by user ${userId}.`);
         return <http:Ok>{body: {message: "Ride started successfully."}};
+    }
+
+    resource function post rides/[string rideId]/end(types:EndRideRequest endRequest) returns http:Ok|http:BadRequest|http:NotFound|error {
+        string userId = "user-001"; // TODO: Get userId from JWT
+
+        repository:Ride? ride = check repository:getRideById(rideId);
+        if ride is () || ride.start_time is () {
+            return <http:NotFound>{body: {message: "Ride not found or has not been started.", rideId: rideId}};
+        }
+
+        if ride.user_id != userId || ride.status != "IN_PROGRESS" {
+            return <http:BadRequest>{body: {message: "Ride cannot be ended. Invalid state or ownership."}};
+        }
+
+        time:Utc endTime = time:utcNow();
+        time:Utc startTime;
+        time:Utc? startTimeOpt = ride.start_time;
+        if startTimeOpt is time:Utc {
+            startTime = startTimeOpt;
+        } else {
+            return <http:BadRequest>{body: types:START_TIME_NULL};
+        }
+        int durationInSeconds = <int>time:utcDiffSeconds(endTime, startTime);
+        // call reward service to calculate price and reward
+        // decimal price = self.calculatePrice(durationInSeconds);
+        decimal price = 1000.00;
+
+        repository:RideUpdate rideUpdate = {
+            end_time: endTime,
+            duration: durationInSeconds,
+            distance: endRequest.distance,
+            end_location: endRequest.end_location,
+            status: repository:ENDED,
+            price: price
+        };
+        _ = check repository:updateRide(rideId, rideUpdate);
+
+        // boolean paymentSuccess = check psc:processPayment(userId, rideId, price);
+        boolean paymentSuccess = true;
+        if !paymentSuccess {
+            log:printError("Payment failed for ride " + rideId);
+            // handle the debt
+        }
+
+        check bsc:releaseBike(ride.bike_id, userId, ride.ride_id);
+
+        log:printInfo(`Ride ${rideId} ended. Duration: ${durationInSeconds}s, Price: ${price}`);
+        return <http:Ok>{
+            body: {
+                message: "Ride completed successfully.",
+                rideId: rideId,
+                durationSeconds: durationInSeconds,
+                totalPrice: price
+            }
+        };
+    }
+
+    resource function get getRide(string rideId) returns http:Ok|http:NotFound|error {
+        repository:Ride? ride = check repository:getRideById(rideId);
+        if ride is () {
+            return <http:NotFound>{body: types:RIDE_NOT_FOUND};
+        }
+        return <http:Ok>{body: ride};
+    }
+
+    resource function get getActiveRide(http:RequestContext ctx) returns 
+        http:Ok|http:NotFound|http:BadRequest|error {
+
+        string userId = "user-001";
+        repository:Ride[]? ride = check repository:getActiveRidesByUserId(userId);
+
+        if ride is () {
+            return <http:NotFound>{body: types:RIDE_NOT_FOUND};
+        } else if (ride.length() > 1) {
+            return <http:BadRequest>{body: types:MULTIPLE_RIDE_ACTIVE};
+        } else {
+            return <http:Ok>{body: ride};
+        }
     }
 }
