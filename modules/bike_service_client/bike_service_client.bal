@@ -15,3 +15,7 @@ public isolated function reserveBike(string bikeId, string userId, string rideId
         return avalability;
     }
 }
+
+public isolated function releaseBike(string bikeId, string userId, string rideId) returns error? {
+    //check httpClient->/api/release.post(message = (), bikeId = bikeId);
+}
