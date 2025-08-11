@@ -27,7 +27,7 @@ service / on new http:Listener(PORT) {
         }
 
         string rideId = uuid:createType4AsString();
-        boolean isSuccess = check bsc:reserveBike(bikeId, userId, rideId);
+        boolean isSuccess = check bsc:reserveBike(bikeId);
         if isSuccess is false {
             return <http:BadRequest>{
                 body: types:BIKE_NOT_AVAILABLE
@@ -138,7 +138,7 @@ service / on new http:Listener(PORT) {
             // handle the debt
         }
 
-        check bsc:releaseBike(ride.bike_id, userId, ride.ride_id);
+        check bsc:releaseBike(ride.bike_id);
 
         log:printInfo(`Ride ${rideId} ended. Duration: ${durationInSeconds}s, Price: ${price}`);
         return <http:Ok>{

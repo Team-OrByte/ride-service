@@ -2,20 +2,38 @@ import ride_service.types;
 
 import ballerina/http;
 
+type Response record {
+    int statusCode;
+    string message?;
+    anydata data?;
+};
+
 configurable types:HttpClientConfig bikeServiceClient = ?;
 
 final http:Client httpClient = check new (bikeServiceClient.url, timeout = bikeServiceClient.timeout);
 
-public isolated function reserveBike(string bikeId, string userId, string rideId) returns boolean|error {
-    boolean|error avalability = httpClient->/api/reserve.post(message = (), bikeId = bikeId);
+public isolated function reserveBike(string bikeId) returns boolean|error {
+    Response|error payload = httpClient->/reserve\-bike/[bikeId].put(message = {});
 
-    if avalability is error {
+    if payload is error {
         return error(string `Error reserving bike with Bike ID: ${bikeId}`);
+    }
+
+    if (payload.statusCode) == http:STATUS_OK {
+        return true;
     } else {
-        return avalability;
+        return false;
     }
 }
 
-public isolated function releaseBike(string bikeId, string userId, string rideId) returns error? {
-    //check httpClient->/api/release.post(message = (), bikeId = bikeId);
+public isolated function releaseBike(string bikeId) returns error? {
+    Response|error payload = httpClient->/release\-bike/[bikeId].put(message = {});
+
+    if payload is error {
+        return error(string `Error releasing bike with Bike ID: ${bikeId}`);
+    }
+
+    if (payload.statusCode) == http:STATUS_OK {
+        return;
+    }
 }
