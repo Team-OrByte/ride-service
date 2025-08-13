@@ -8,7 +8,7 @@ import ballerina/time;
 public enum Status {
     RESERVED,
     IN_PROGRESS,
-    PAUSED,
+    CANCELLED,
     ENDED
 }
 

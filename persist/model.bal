@@ -21,6 +21,6 @@ type Ride record {|
 enum Status {
     RESERVED,
     IN_PROGRESS,
-    PAUSED,
+    CANCELLED,
     ENDED
 }

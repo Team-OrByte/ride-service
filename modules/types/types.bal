@@ -20,11 +20,18 @@ public type RideStartEvent record {|
 |};
 
 public type EndRideRequest record {|
-    string rideId;
     string end_location;
     float distance;
 |};
 
+public type ClientUpdatePayload record {|
+    int duration_seconds;
+    float distance_meters;
+|};
+
+public type ServerPriceUpdatePayload record {|
+    decimal current_price;
+|};
 
 public type ErrorResponse record {|
     string code;
@@ -54,4 +61,9 @@ public const ErrorResponse USER_NOT_CAPABLE = {
 public const ErrorResponse BIKE_NOT_AVAILABLE = {
     code: "RSC-005",
     message: "Bike is not available"
+};
+
+public ErrorResponse INVALID_RIDE_START_REQUEST = {
+    code: "RSC-006",
+    message: "Ride cannot be started. Invalid state or ownership."
 };
