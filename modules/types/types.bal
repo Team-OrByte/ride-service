@@ -25,6 +25,14 @@ public type EndRideRequest record {|
     float distance;
 |};
 
+public type ClientUpdatePayload record {|
+    int duration_seconds;
+    float distance_meters;
+|};
+
+public type ServerPriceUpdatePayload record {|
+    decimal current_price;
+|};
 
 public type ErrorResponse record {|
     string code;

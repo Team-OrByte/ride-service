@@ -5,11 +5,15 @@ import ride_service.types;
 import ride_service.user_service_client as usc;
 
 import ballerina/http;
+import ballerina/io;
 import ballerina/log;
 import ballerina/time;
 import ballerina/uuid;
+import ballerina/websocket;
 
 configurable int PORT = ?;
+
+final map<websocket:Caller> rideConnections = {};
 
 service / on new http:Listener(PORT) {
 
@@ -159,7 +163,7 @@ service / on new http:Listener(PORT) {
         return <http:Ok>{body: ride};
     }
 
-    resource function get getActiveRide(http:RequestContext ctx) returns 
+    resource function get getActiveRide(http:RequestContext ctx) returns
         http:Ok|http:NotFound|http:BadRequest|error {
 
         string userId = "user-001";
@@ -171,6 +175,84 @@ service / on new http:Listener(PORT) {
             return <http:BadRequest>{body: types:MULTIPLE_RIDE_ACTIVE};
         } else {
             return <http:Ok>{body: ride};
+        }
+    }
+}
+
+service /rides on new websocket:Listener(27750) {
+
+    function init() {
+        io:println("Websocket Initalized.");
+    }
+
+    resource function get .(string rideId) returns websocket:Service|websocket:UpgradeError {
+        repository:Ride?|error ride = repository:getRideById(rideId);
+        if ride is error {
+            return error(ride.message());
+        }
+        if ride is () {
+            return error("Ride not found");
+        }
+        if ride.status != "IN_PROGRESS" {
+            return error("Ride is not in progess");
+        }
+        return new RidePricingService(rideId);
+    }
+}
+
+service class RidePricingService {
+    *websocket:Service;
+
+    private final string rideId;
+
+    function init(string rideId) {
+        self.rideId = rideId;
+    }
+
+    remote function onOpen(websocket:Caller caller) {
+        lock {
+            rideConnections[self.rideId] = caller;
+        }
+
+        log:printInfo(string `Client connected for ride ${self.rideId} price tracking`);
+    }
+
+    remote function onClose(websocket:Caller caller, int statusCode, string reason) {
+        lock {
+            _ = rideConnections.remove(self.rideId);
+        }
+        log:printInfo(string `Client disconnected from ride ${self.rideId}, reason: ${reason}`);
+    }
+
+    remote function onError(websocket:Caller caller, error err) {
+        lock {
+            _ = rideConnections.remove(self.rideId);
+        }
+        log:printError(string `WebSocket error for ride ${self.rideId}: `, err);
+    }
+
+    remote function onTextMessage(websocket:Caller caller, string text) {
+        log:printInfo(string `Ride update received from client ${self.rideId}`);
+
+        json|error parsed = checkpanic text.fromJsonString();
+        if parsed is json {
+            types:ClientUpdatePayload|error payload = parsed.cloneWithType(types:ClientUpdatePayload);
+            if payload is types:ClientUpdatePayload {
+                // Calculate price using reward service here
+                decimal currentPrice = 0.0;
+
+                types:ServerPriceUpdatePayload response = {
+                    current_price: currentPrice.round(2)
+                };
+                error? writeResult = caller->writeMessage(response);
+                if writeResult is error {
+                    log:printError("Failed to push price update", writeResult);
+                }
+            } else {
+                log:printWarn(string `Invalid payload received for ride ${self.rideId}`);
+            }
+        } else {
+            log:printWarn(string `Failed to parse message as JSON for ride ${self.rideId}`);
         }
     }
 }
