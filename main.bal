@@ -75,11 +75,11 @@ service / on new http:Listener(PORT) {
 
         repository:Ride? ride = check repository:getRideById(rideId);
         if ride is () {
-            return <http:NotFound>{body: {message: "Ride with ID not found.", rideId: rideId}};
+            return <http:NotFound>{body: {message: types:RIDE_NOT_FOUND}};
         }
 
         if (ride.user_id != userId || ride.status != repository:RESERVED) {
-            return <http:BadRequest>{body: {message: "Invalid request."}};
+            return <http:BadRequest>{body: types:INVALID_RIDE_START_REQUEST};
         }
 
         types:RideStartEvent newStartEvent = {
@@ -153,6 +153,25 @@ service / on new http:Listener(PORT) {
                 totalPrice: price
             }
         };
+    }
+
+    resource function post rides/[string rideId]/cancel() returns http:Ok|http:BadRequest|http:NotFound|error {
+        string userId = "user-001"; // TODO: Get userId from JWT
+
+        repository:Ride? ride = check repository:getRideById(rideId);
+        if ride is () {
+            return <http:NotFound>{body: types:RIDE_NOT_FOUND};
+        }
+
+        if ride.user_id != userId || ride.status != "RESERVED" {
+            return <http:BadRequest>{body: {message: "This ride cannot be canceled."}};
+        }
+
+        _ = check repository:updateRide(rideId, {status: repository:CANCELLED});
+        _ = check bsc:releaseBike(ride.bike_id);
+
+        log:printInfo(`Ride ${rideId} canceled by user ${userId}.`);
+        return <http:Ok>{body: {message: "Ride reservation has been canceled."}};
     }
 
     resource function get getRide(string rideId) returns http:Ok|http:NotFound|error {
