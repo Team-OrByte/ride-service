@@ -22,6 +22,7 @@ public type RideStartEvent record {|
 public type EndRideRequest record {|
     string end_location;
     float distance;
+    boolean claimReward;
 |};
 
 public type ClientUpdatePayload record {|
