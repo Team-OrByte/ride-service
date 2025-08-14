@@ -17,7 +17,14 @@ configurable int PORT = ?;
 
 final map<websocket:Caller> rideConnections = {};
 
-service / on new http:Listener(PORT) {
+@http:ServiceConfig {
+    cors: {
+        allowOrigins: ["*"],
+        allowMethods: ["POST", "PUT", "GET", "POST", "OPTIONS"],
+        allowHeaders: ["Content-Type","Access-Control-Allow-Origin","X-Service-Name"]
+    }
+}
+service /ride on new http:Listener(PORT) {
 
     function init() {
         log:printInfo(`The Ride Service Initiated on Port: ${PORT}`);
@@ -44,7 +51,7 @@ service / on new http:Listener(PORT) {
             bike_id: bikeId,
             ride_id: rideId,
             user_id: userId,
-            start_time: (),
+            start_time: time:utcNow(),
             end_time: (),
             duration: (),
             distance: (),
@@ -149,6 +156,15 @@ service / on new http:Listener(PORT) {
             _ = check rsc:rewardPoints(rewardRequest);
         }
 
+        types:RideEndEvent endEvent = {
+            bike_id: ride.bike_id,
+            ride_id: ride.ride_id,
+            user_id: ride.user_id,
+            end_time: endTime,
+            price: price
+        };
+        check event_handler:produceEndEvent(endEvent);
+
         log:printInfo(`Ride ${rideId} ended. Duration: ${durationInSeconds}s, Price: ${price}`);
         return <http:Ok>{
             body: {
@@ -171,11 +187,21 @@ service / on new http:Listener(PORT) {
         if ride.user_id != userId || ride.status != "RESERVED" {
             return <http:BadRequest>{body: {message: "This ride cannot be canceled."}};
         }
-        _ = check repository:updateRide(rideId, {status: repository:CANCELLED, price: ps:BASE_PRICE});
+        decimal basePrice = ps:BASE_PRICE;
+        _ = check repository:updateRide(rideId, {status: repository:CANCELLED, price: basePrice});
         _ = check bsc:releaseBike(ride.bike_id, endLocation = ride.start_location);
 
+        types:RideCancelEvent cancelEvent = {
+            bike_id: ride.bike_id,
+            ride_id: ride.ride_id,
+            user_id: ride.user_id,
+            start_location: ride.start_location,
+            price: basePrice
+        };
+        check event_handler:produceCancelEvent(cancelEvent);
+
         log:printInfo(`Ride ${rideId} canceled by user ${userId}.`);
-        return <http:Ok>{body: {message: "Ride reservation has been canceled."}};
+        return <http:Ok>{body: {message: "Ride reservation has been canceled.", price: basePrice}};
     }
 
     resource function get getRide(string rideId) returns http:Ok|http:NotFound|error {

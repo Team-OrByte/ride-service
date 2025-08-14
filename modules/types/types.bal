@@ -25,6 +25,22 @@ public type EndRideRequest record {|
     boolean claimReward;
 |};
 
+public type RideEndEvent record {|
+    string bike_id;
+    string ride_id;
+    string user_id;
+    time:Utc end_time;
+    decimal price;
+|};
+
+public type RideCancelEvent record {|
+    string bike_id;
+    string ride_id;
+    string user_id;
+    string start_location;
+    decimal price;
+|};
+
 public type ClientUpdatePayload record {|
     int duration_seconds;
     float distance_meters;
