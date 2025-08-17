@@ -1,6 +1,8 @@
 import ride_service.bike_service_client as bsc;
 import ride_service.event_handler;
+import ride_service.pricing_service as ps;
 import ride_service.repository;
+import ride_service.reward_service_client as rsc;
 import ride_service.types;
 import ride_service.user_service_client as usc;
 
@@ -15,7 +17,14 @@ configurable int PORT = ?;
 
 final map<websocket:Caller> rideConnections = {};
 
-service / on new http:Listener(PORT) {
+@http:ServiceConfig {
+    cors: {
+        allowOrigins: ["*"],
+        allowMethods: ["POST", "PUT", "GET", "POST", "OPTIONS"],
+        allowHeaders: ["Content-Type","Access-Control-Allow-Origin","X-Service-Name"]
+    }
+}
+service /ride on new http:Listener(PORT) {
 
     function init() {
         log:printInfo(`The Ride Service Initiated on Port: ${PORT}`);
@@ -42,7 +51,7 @@ service / on new http:Listener(PORT) {
             bike_id: bikeId,
             ride_id: rideId,
             user_id: userId,
-            start_time: (),
+            start_time: time:utcNow(),
             end_time: (),
             duration: (),
             distance: (),
@@ -121,10 +130,8 @@ service / on new http:Listener(PORT) {
             return <http:BadRequest>{body: types:START_TIME_NULL};
         }
         int durationInSeconds = <int>time:utcDiffSeconds(endTime, startTime);
-        // call reward service to calculate price and reward
-        // decimal price = self.calculatePrice(durationInSeconds);
-        decimal price = 1000.00;
 
+        decimal price = ps:calculatePrice(durationInSeconds, <int>endRequest.distance);
         repository:RideUpdate rideUpdate = {
             end_time: endTime,
             duration: durationInSeconds,
@@ -134,15 +141,29 @@ service / on new http:Listener(PORT) {
             price: price
         };
         _ = check repository:updateRide(rideId, rideUpdate);
+        check bsc:releaseBike(ride.bike_id, endRequest.end_location);
 
-        // boolean paymentSuccess = check psc:processPayment(userId, rideId, price);
-        boolean paymentSuccess = true;
-        if !paymentSuccess {
-            log:printError("Payment failed for ride " + rideId);
-            // handle the debt
+        if endRequest.claimReward is true {
+            rsc:RewardPointsRequest rewardRequest = {
+                rideId: ride.ride_id,
+                timestamp: 0,
+                distance: endRequest.distance,
+                time: 5,
+                startFrom: ride.start_location,
+                stopAt: endRequest.end_location,
+                userId: userId
+            };
+            _ = check rsc:rewardPoints(rewardRequest);
         }
 
-        check bsc:releaseBike(ride.bike_id);
+        types:RideEndEvent endEvent = {
+            bike_id: ride.bike_id,
+            ride_id: ride.ride_id,
+            user_id: ride.user_id,
+            end_time: endTime,
+            price: price
+        };
+        check event_handler:produceEndEvent(endEvent);
 
         log:printInfo(`Ride ${rideId} ended. Duration: ${durationInSeconds}s, Price: ${price}`);
         return <http:Ok>{
@@ -166,12 +187,21 @@ service / on new http:Listener(PORT) {
         if ride.user_id != userId || ride.status != "RESERVED" {
             return <http:BadRequest>{body: {message: "This ride cannot be canceled."}};
         }
+        decimal basePrice = ps:BASE_PRICE;
+        _ = check repository:updateRide(rideId, {status: repository:CANCELLED, price: basePrice});
+        _ = check bsc:releaseBike(ride.bike_id, endLocation = ride.start_location);
 
-        _ = check repository:updateRide(rideId, {status: repository:CANCELLED});
-        _ = check bsc:releaseBike(ride.bike_id);
+        types:RideCancelEvent cancelEvent = {
+            bike_id: ride.bike_id,
+            ride_id: ride.ride_id,
+            user_id: ride.user_id,
+            start_location: ride.start_location,
+            price: basePrice
+        };
+        check event_handler:produceCancelEvent(cancelEvent);
 
         log:printInfo(`Ride ${rideId} canceled by user ${userId}.`);
-        return <http:Ok>{body: {message: "Ride reservation has been canceled."}};
+        return <http:Ok>{body: {message: "Ride reservation has been canceled.", price: basePrice}};
     }
 
     resource function get getRide(string rideId) returns http:Ok|http:NotFound|error {
@@ -257,8 +287,10 @@ service class RidePricingService {
         if parsed is json {
             types:ClientUpdatePayload|error payload = parsed.cloneWithType(types:ClientUpdatePayload);
             if payload is types:ClientUpdatePayload {
-                // Calculate price using reward service here
-                decimal currentPrice = 0.0;
+                decimal currentPrice = ps:calculatePrice(
+                        payload.duration_seconds,
+                        <int>payload.distance_meters
+                );
 
                 types:ServerPriceUpdatePayload response = {
                     current_price: currentPrice.round(2)

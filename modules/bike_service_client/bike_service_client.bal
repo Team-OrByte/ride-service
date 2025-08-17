@@ -26,8 +26,8 @@ public isolated function reserveBike(string bikeId) returns boolean|error {
     }
 }
 
-public isolated function releaseBike(string bikeId) returns error? {
-    Response|error payload = httpClient->/release\-bike/[bikeId].put(message = {});
+public isolated function releaseBike(string bikeId, string endLocation) returns error? {
+    Response|error payload = httpClient->/release\-bike/[bikeId].put(message = {}, endLocation = endLocation);
 
     if payload is error {
         return error(string `Error releasing bike with Bike ID: ${bikeId}`);
