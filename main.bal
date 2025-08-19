@@ -8,12 +8,20 @@ import ride_service.user_service_client as usc;
 
 import ballerina/http;
 import ballerina/io;
+import ballerina/jwt;
 import ballerina/log;
 import ballerina/time;
 import ballerina/uuid;
 import ballerina/websocket;
 
 configurable int PORT = ?;
+configurable string pub_key = ?;
+
+public type Claims record {|
+    string? userId;
+    string? email;
+    string? role;
+|};
 
 final map<websocket:Caller> rideConnections = {};
 
@@ -21,8 +29,21 @@ final map<websocket:Caller> rideConnections = {};
     cors: {
         allowOrigins: ["*"],
         allowMethods: ["POST", "PUT", "GET", "POST", "OPTIONS"],
-        allowHeaders: ["Content-Type","Access-Control-Allow-Origin","X-Service-Name"]
-    }
+        allowHeaders: ["Content-Type", "Access-Control-Allow-Origin", "X-Service-Name"]
+    },
+    auth: [
+        {
+            jwtValidatorConfig: {
+                issuer: "Orbyte",
+                audience: "vEwzbcasJVQm1jVYHUHCjhxZ4tYa",
+                signatureConfig: {
+                    certFile: pub_key
+                },
+                scopeKey: "scp"
+            },
+            scopes: "user"
+        }
+    ]
 }
 service /ride on new http:Listener(PORT) {
 
@@ -30,17 +51,22 @@ service /ride on new http:Listener(PORT) {
         log:printInfo(`The Ride Service Initiated on Port: ${PORT}`);
     }
 
-    resource function post reserveRide(http:RequestContext ctx, string bikeId, string startLocation) returns http:Accepted|http:BadRequest|error {
-        string userId = "user-001"; // Assumes we get use ID with http header or user service
+    resource function post reserveRide(@http:Header string Authorization, string bikeId, string startLocation) returns http:Accepted|http:BadRequest|error {
+        Claims claims = check extractClaims(Authorization);
+        string userId;
+        if claims.userId is string {
+            userId = <string>claims.userId;
+        } else {
+            return <http:BadRequest>{body: "Invalid Token"};
+        }
         boolean isCapable = check usc:userCapability(userId);
         if isCapable is false {
             return <http:BadRequest>{
                 body: types:USER_NOT_CAPABLE
             };
         }
-
         string rideId = uuid:createType4AsString();
-        boolean isSuccess = check bsc:reserveBike(bikeId);
+        boolean isSuccess = check bsc:reserveBike(bikeId, Authorization);
         if isSuccess is false {
             return <http:BadRequest>{
                 body: types:BIKE_NOT_AVAILABLE
@@ -79,8 +105,14 @@ service /ride on new http:Listener(PORT) {
         };
     }
 
-    resource function post rides/[string rideId]/startRide() returns http:Ok|http:BadRequest|http:NotFound|error {
-        string userId = "user-001";
+    resource function post rides/[string rideId]/startRide(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|error {
+        Claims claims = check extractClaims(Authorization);
+        string userId;
+        if claims.userId is string {
+            userId = <string>claims.userId;
+        } else {
+            return <http:BadRequest>{body: "Invalid Token"};
+        }
 
         repository:Ride? ride = check repository:getRideById(rideId);
         if ride is () {
@@ -109,8 +141,14 @@ service /ride on new http:Listener(PORT) {
         return <http:Ok>{body: {message: "Ride started successfully."}};
     }
 
-    resource function post rides/[string rideId]/end(types:EndRideRequest endRequest) returns http:Ok|http:BadRequest|http:NotFound|error {
-        string userId = "user-001"; // TODO: Get userId from JWT
+    resource function post rides/[string rideId]/end(@http:Header string Authorization, types:EndRideRequest endRequest) returns http:Ok|http:BadRequest|http:NotFound|error {
+        Claims claims = check extractClaims(Authorization);
+        string userId;
+        if claims.userId is string {
+            userId = <string>claims.userId;
+        } else {
+            return <http:BadRequest>{body: "Invalid Token"};
+        }
 
         repository:Ride? ride = check repository:getRideById(rideId);
         if ride is () || ride.start_time is () {
@@ -141,7 +179,7 @@ service /ride on new http:Listener(PORT) {
             price: price
         };
         _ = check repository:updateRide(rideId, rideUpdate);
-        check bsc:releaseBike(ride.bike_id, endRequest.end_location);
+        check bsc:releaseBike(Authorization, ride.bike_id, endRequest.end_location);
 
         if endRequest.claimReward is true {
             rsc:RewardPointsRequest rewardRequest = {
@@ -153,7 +191,7 @@ service /ride on new http:Listener(PORT) {
                 stopAt: endRequest.end_location,
                 userId: userId
             };
-            _ = check rsc:rewardPoints(rewardRequest);
+            _ = check rsc:rewardPoints(rewardRequest, Authorization);
         }
 
         types:RideEndEvent endEvent = {
@@ -176,8 +214,14 @@ service /ride on new http:Listener(PORT) {
         };
     }
 
-    resource function post rides/[string rideId]/cancel() returns http:Ok|http:BadRequest|http:NotFound|error {
-        string userId = "user-001"; // TODO: Get userId from JWT
+    resource function post rides/[string rideId]/cancel(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|error {
+        Claims claims = check extractClaims(Authorization);
+        string userId;
+        if claims.userId is string {
+            userId = <string>claims.userId;
+        } else {
+            return <http:BadRequest>{body: "Invalid Token"};
+        }
 
         repository:Ride? ride = check repository:getRideById(rideId);
         if ride is () {
@@ -189,14 +233,14 @@ service /ride on new http:Listener(PORT) {
         }
         decimal basePrice = ps:BASE_PRICE;
         _ = check repository:updateRide(rideId, {status: repository:CANCELLED, price: basePrice});
-        _ = check bsc:releaseBike(ride.bike_id, endLocation = ride.start_location);
+        _ = check bsc:releaseBike(Authorization, ride.bike_id, endLocation = ride.start_location);
 
         types:RideCancelEvent cancelEvent = {
-            bike_id: ride.bike_id,
-            ride_id: ride.ride_id,
-            user_id: ride.user_id,
-            start_location: ride.start_location,
-            price: basePrice
+        bike_id: ride.bike_id,
+        ride_id: ride.ride_id,
+        user_id: ride.user_id,
+        start_location: ride.start_location,
+        price: basePrice
         };
         check event_handler:produceCancelEvent(cancelEvent);
 
@@ -212,12 +256,17 @@ service /ride on new http:Listener(PORT) {
         return <http:Ok>{body: ride};
     }
 
-    resource function get getActiveRide(http:RequestContext ctx) returns
+    resource function get getActiveRide(@http:Header string Authorization) returns
         http:Ok|http:NotFound|http:BadRequest|error {
+        Claims claims = check extractClaims(Authorization);
+        string userId;
+        if claims.userId is string {
+            userId = <string>claims.userId;
+        } else {
+            return <http:BadRequest>{body: "Invalid Token"};
+        }
 
-        string userId = "user-001";
         repository:Ride[]? ride = check repository:getActiveRidesByUserId(userId);
-
         if ride is () {
             return <http:NotFound>{body: types:RIDE_NOT_FOUND};
         } else if (ride.length() > 1) {
@@ -228,7 +277,7 @@ service /ride on new http:Listener(PORT) {
     }
 }
 
-service /rides on new websocket:Listener(27750) {
+service /rides on new websocket:Listener(27751) {
 
     function init() {
         io:println("Websocket Initalized.");
@@ -242,7 +291,7 @@ service /rides on new websocket:Listener(27750) {
         if ride is () {
             return error("Ride not found");
         }
-        if ride.status != "IN_PROGRESS" {
+        if ride.status != "IN_PROGRESS" && ride.status != "RESERVED" {
             return error("Ride is not in progess");
         }
         return new RidePricingService(rideId);
@@ -305,5 +354,39 @@ service class RidePricingService {
         } else {
             log:printWarn(string `Failed to parse message as JSON for ride ${self.rideId}`);
         }
+    }
+}
+
+public function extractClaims(string authHeader) returns Claims|error {
+    int? index = authHeader.indexOf("Bearer ");
+    if index is () {
+        return error("Invalid Authorization header format");
+    }
+
+    string jwtString = authHeader.substring(index + 7);
+
+    var decoded = jwt:decode(jwtString);
+    if decoded is [jwt:Header, jwt:Payload] {
+        jwt:Payload payload = decoded[1];
+        Claims claims = {role: (), userId: (), email: ()};
+
+        // Extract userId
+        if payload["userId"] is string {
+            claims.userId = payload["userId"].toString();
+        }
+
+        // Extract email
+        if payload["sub"] is string {
+            claims.email = payload["sub"];
+        }
+
+        // Extract scopes
+        if (payload["scp"] is string) {
+            claims.role = payload["scp"].toString();
+        }
+
+        return claims;
+    } else if decoded is jwt:Error {
+        return error("JWT decode failed: " + decoded.toString());
     }
 }
