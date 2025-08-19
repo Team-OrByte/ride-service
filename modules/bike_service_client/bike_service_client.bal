@@ -12,8 +12,8 @@ configurable types:HttpClientConfig bikeServiceClient = ?;
 
 final http:Client httpClient = check new (bikeServiceClient.url, timeout = bikeServiceClient.timeout);
 
-public isolated function reserveBike(string bikeId) returns boolean|error {
-    Response|error payload = httpClient->/reserve\-bike/[bikeId].put(message = {});
+public isolated function reserveBike(string bikeId, @http:Header string Authorization) returns boolean|error {
+    Response|error payload = httpClient->/reserve\-bike/[bikeId].put(message = {}, headers = {"Authorization": Authorization});
 
     if payload is error {
         return error(string `Error reserving bike with Bike ID: ${bikeId}`);
@@ -26,8 +26,8 @@ public isolated function reserveBike(string bikeId) returns boolean|error {
     }
 }
 
-public isolated function releaseBike(string bikeId, string endLocation) returns error? {
-    Response|error payload = httpClient->/release\-bike/[bikeId].put(message = {}, endLocation = endLocation);
+public isolated function releaseBike(@http:Header string Authorization, string bikeId, string endLocation) returns error? {
+    Response|error payload = httpClient->/release\-bike/[bikeId].put(message = {}, endLocation = endLocation, headers = {"Authorization": Authorization});
 
     if payload is error {
         return error(string `Error releasing bike with Bike ID: ${bikeId}`);
