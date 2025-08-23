@@ -20,7 +20,7 @@ services:
   
   kafka:
     image: bitnami/kafka:latest
-    container_name: kafka
+    container_name: kafka_server
     restart: always
     ports:
       - "9094:9094"
@@ -41,11 +41,27 @@ services:
       - ALLOW_PLAINTEXT_LISTENER=yes
     networks:
       - ride_network
+  
+  mongo:
+    image: mongo:latest
+    container_name: notification_service_mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS}
+      - MONGO_INITDB_DATABASE=notification-management
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+    networks:
+      - ride_network
 
 volumes:
   postgres_data:
   zookeeper_data:
   kafka_data:
+  mongo_data:
 
 networks:
   ride_network:
