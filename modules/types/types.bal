@@ -1,44 +1,12 @@
-import ballerina/time;
-
 public type HttpClientConfig record {|
     string url;
     decimal timeout;
-|};
-
-public type RideReserveEvent record {|
-    string ride_id;
-    string user_id;
-    string bike_id;
-    string start_location;
-|};
-
-public type RideStartEvent record {|
-    string ride_id;
-    string user_id;
-    string bike_id;
-    time:Utc start_time;
 |};
 
 public type EndRideRequest record {|
     string end_location;
     float distance;
     boolean claimReward;
-|};
-
-public type RideEndEvent record {|
-    string bike_id;
-    string ride_id;
-    string user_id;
-    time:Utc end_time;
-    decimal price;
-|};
-
-public type RideCancelEvent record {|
-    string bike_id;
-    string ride_id;
-    string user_id;
-    string start_location;
-    decimal price;
 |};
 
 public type ClientUpdatePayload record {|
@@ -53,6 +21,36 @@ public type ServerPriceUpdatePayload record {|
 public type ErrorResponse record {|
     string code;
     string message;
+|};
+
+public type Event record {|
+     string userId;
+     EventType eventType;
+     EventDataType data;
+|};
+
+public enum EventType {
+    RIDE_STARTED,
+    RIDE_ENDED
+};
+
+public type EventDataType RideStartedData|RideEndedData;
+
+public type RideStartedData record {|
+    string bikeId;
+    string startStation;
+|};
+
+public type RideEndedData record {|
+    string bikeId;
+    string duration;
+    string fare;
+|};
+
+public type PaymentEvent record {|
+    string rideId;
+    string userId;
+    string fare;
 |};
 
 public const ErrorResponse START_TIME_NULL = {

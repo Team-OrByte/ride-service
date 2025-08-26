@@ -8,20 +8,14 @@ import ride_service.user_service_client as usc;
 
 import ballerina/http;
 import ballerina/io;
-import ballerina/jwt;
 import ballerina/log;
 import ballerina/time;
 import ballerina/uuid;
 import ballerina/websocket;
 
 configurable int PORT = ?;
+configurable int WEBSOCKET_PORT = ?;
 configurable string pub_key = ?;
-
-public type Claims record {|
-    string? userId;
-    string? email;
-    string? role;
-|};
 
 final map<websocket:Caller> rideConnections = {};
 
@@ -45,34 +39,28 @@ final map<websocket:Caller> rideConnections = {};
         }
     ]
 }
-service /ride on new http:Listener(PORT) {
+service /ride\-service on new http:Listener(PORT) {
 
     function init() {
         log:printInfo(`The Ride Service Initiated on Port: ${PORT}`);
     }
 
-    resource function post reserveRide(@http:Header string Authorization, string bikeId, string startLocation) returns http:Accepted|http:BadRequest|error {
-        Claims claims = check extractClaims(Authorization);
-        string userId;
-        if claims.userId is string {
-            userId = <string>claims.userId;
-        } else {
+    resource function post reserveRide(@http:Header string Authorization, string bikeId, string startLocation) returns http:Accepted|http:BadRequest|http:InternalServerError|error {
+        string? userId = check getUserIdFromHeader(Authorization);
+        if userId is null {
             return <http:BadRequest>{body: "Invalid Token"};
         }
-        boolean isCapable = check usc:userCapability(userId);
-        if isCapable is false {
-            return <http:BadRequest>{
-                body: types:USER_NOT_CAPABLE
-            };
+
+        boolean|error userCap = usc:userCapability(userId, Authorization);
+        if userCap is error {
+            log:printError("User capability check failed", err = userCap.message());
+            return <http:InternalServerError>{body: "User Service Unavailable"};
         }
-        string rideId = uuid:createType4AsString();
-        boolean isSuccess = check bsc:reserveBike(bikeId, Authorization);
-        if isSuccess is false {
-            return <http:BadRequest>{
-                body: types:BIKE_NOT_AVAILABLE
-            };
+        if !userCap {
+            return <http:BadRequest>{body: types:USER_NOT_CAPABLE};
         }
 
+        string rideId = uuid:createType4AsString();
         repository:RideInsert newRide = {
             bike_id: bikeId,
             ride_id: rideId,
@@ -83,20 +71,37 @@ service /ride on new http:Listener(PORT) {
             distance: (),
             start_location: startLocation,
             end_location: (),
-            status: "RESERVED",
+            status: repository:PENDING,
             price: ()
         };
-        _ = check repository:insertRide(newRide);
+        string[]|error insertResult = repository:insertRide(newRide);
+        if insertResult is error {
+            log:printError("Failed to insert ride", rideId = rideId, err = insertResult.message());
+            return <http:InternalServerError>{body: "Failed to reserve ride"};
+        }
+        log:printInfo(`Ride ${rideId} inserted with PENDING status`);
 
-        types:RideReserveEvent newReserveEvent = {
-            bike_id: bikeId,
-            ride_id: rideId,
-            user_id: userId,
-            start_location: startLocation
-        };
-        check event_handler:produceReserveEvent(newReserveEvent);
+        boolean|error bikeresult = bsc:reserveBike(bikeId, Authorization);
+        if bikeresult is error {
+            _ = check repository:updateRide(rideId, {status: repository:FAILED});
+            return <http:InternalServerError>{body: "Bike reservation failed. Ride marked as FAILED."};
+        }
+        if bikeresult is false {
+            return <http:BadRequest>{
+                body: types:BIKE_NOT_AVAILABLE
+            };
+        }
+        log:printInfo(`Bike ${bikeId} reserved successfully`);
 
-        log:printInfo(`Ride ${rideId} reserved for user ${userId} with bike ${bikeId}`);
+        repository:Ride|error updateRideResult = repository:updateRide(rideId, {status: repository:RESERVED});
+        if updateRideResult is error {
+            // Punlish release as event
+            _ = check bsc:releaseBike(Authorization, bikeId, startLocation);
+            _ = check repository:updateRide(rideId, {status: repository:FAILED});
+            return <http:InternalServerError>{body: "Failed to mark ride as RESERVED. Bike released."};
+        }
+        log:printInfo(`Ride ${rideId} updated to RESERVED`);
+        
         return <http:Accepted>{
             body: {
                 message: "You can start the ride.",
@@ -105,54 +110,57 @@ service /ride on new http:Listener(PORT) {
         };
     }
 
-    resource function post rides/[string rideId]/startRide(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|error {
-        Claims claims = check extractClaims(Authorization);
-        string userId;
-        if claims.userId is string {
-            userId = <string>claims.userId;
-        } else {
+    resource function post rides/[string rideId]/startRide(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|http:InternalServerError|error {
+        string? userId = check getUserIdFromHeader(Authorization);
+        if userId is null {
             return <http:BadRequest>{body: "Invalid Token"};
         }
 
-        repository:Ride? ride = check repository:getRideById(rideId);
+        repository:Ride?|error ride = check repository:getRideById(rideId);
+        if ride is error {
+            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+        }
         if ride is () {
             return <http:NotFound>{body: {message: types:RIDE_NOT_FOUND}};
         }
-
         if (ride.user_id != userId || ride.status != repository:RESERVED) {
             return <http:BadRequest>{body: types:INVALID_RIDE_START_REQUEST};
         }
 
-        types:RideStartEvent newStartEvent = {
-            bike_id: ride.bike_id,
-            ride_id: ride.ride_id,
-            user_id: ride.user_id,
-            start_time: time:utcNow()
-        };
+        time:Utc startTime = time:utcNow();
         repository:RideUpdate rideUpdate = {
             status: repository:IN_PROGRESS,
-            start_time: newStartEvent.start_time
+            start_time: startTime
         };
-
         _ = check repository:updateRide(rideId, rideUpdate);
-        check event_handler:produceStartEvent(newStartEvent);
+
+        types:RideStartedData rideStartedData = {
+            bikeId: ride.bike_id,
+            startStation: ride.start_location
+        };
+        types:Event notifEvent = {
+            userId: userId,
+            eventType: types:RIDE_STARTED,
+            data: rideStartedData
+        };
+        event_handler:produceRideNotifEvent(notifEvent, notifEvent.userId);
 
         log:printInfo(`Ride ${rideId} started by user ${userId}.`);
         return <http:Ok>{body: {message: "Ride started successfully."}};
     }
 
-    resource function post rides/[string rideId]/end(@http:Header string Authorization, types:EndRideRequest endRequest) returns http:Ok|http:BadRequest|http:NotFound|error {
-        Claims claims = check extractClaims(Authorization);
-        string userId;
-        if claims.userId is string {
-            userId = <string>claims.userId;
-        } else {
+    resource function post rides/[string rideId]/end(@http:Header string Authorization, types:EndRideRequest endRequest) returns http:Ok|http:BadRequest|http:NotFound|http:InternalServerError|error {
+        string? userId = check getUserIdFromHeader(Authorization);
+        if userId is null {
             return <http:BadRequest>{body: "Invalid Token"};
         }
 
-        repository:Ride? ride = check repository:getRideById(rideId);
+        repository:Ride?|error ride = repository:getRideById(rideId);
+        if ride is error {
+            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+        }
         if ride is () || ride.start_time is () {
-            return <http:NotFound>{body: {message: "Ride not found or has not been started.", rideId: rideId}};
+            return <http:NotFound>{body: {message: "Ride not found or not started.", rideId: rideId}};
         }
 
         if ride.user_id != userId || ride.status != "IN_PROGRESS" {
@@ -160,16 +168,9 @@ service /ride on new http:Listener(PORT) {
         }
 
         time:Utc endTime = time:utcNow();
-        time:Utc startTime;
-        time:Utc? startTimeOpt = ride.start_time;
-        if startTimeOpt is time:Utc {
-            startTime = startTimeOpt;
-        } else {
-            return <http:BadRequest>{body: types:START_TIME_NULL};
-        }
-        int durationInSeconds = <int>time:utcDiffSeconds(endTime, startTime);
-
+        int durationInSeconds = <int>time:utcDiffSeconds(endTime, <time:Utc>ride.start_time);
         decimal price = ps:calculatePrice(durationInSeconds, <int>endRequest.distance);
+        
         repository:RideUpdate rideUpdate = {
             end_time: endTime,
             duration: durationInSeconds,
@@ -179,7 +180,9 @@ service /ride on new http:Listener(PORT) {
             price: price
         };
         _ = check repository:updateRide(rideId, rideUpdate);
-        check bsc:releaseBike(Authorization, ride.bike_id, endRequest.end_location);
+
+        // should publish this as event
+        _ = check bsc:releaseBike(Authorization, ride.bike_id, endRequest.end_location);
 
         if endRequest.claimReward is true {
             rsc:RewardPointsRequest rewardRequest = {
@@ -191,17 +194,28 @@ service /ride on new http:Listener(PORT) {
                 stopAt: endRequest.end_location,
                 userId: userId
             };
+            // should publish this as event
             _ = check rsc:rewardPoints(rewardRequest, Authorization);
         }
 
-        types:RideEndEvent endEvent = {
-            bike_id: ride.bike_id,
-            ride_id: ride.ride_id,
-            user_id: ride.user_id,
-            end_time: endTime,
-            price: price
+        types:PaymentEvent paymentEvent = {
+            rideId: rideId,
+            userId: userId,
+            fare: price.toString()
         };
-        check event_handler:produceEndEvent(endEvent);
+        event_handler:producePaymentEvent(paymentEvent, userId);
+
+        types:RideEndedData rideEndedData = {
+            bikeId: ride.bike_id,
+            duration: durationInSeconds.toString(),
+            fare: price.toString()
+        };
+        types:Event notifEvent = {
+            userId: userId,
+            eventType: types:RIDE_ENDED,
+            data: rideEndedData
+        };
+        event_handler:produceRideNotifEvent(notifEvent, notifEvent.userId);
 
         log:printInfo(`Ride ${rideId} ended. Duration: ${durationInSeconds}s, Price: ${price}`);
         return <http:Ok>{
@@ -214,16 +228,16 @@ service /ride on new http:Listener(PORT) {
         };
     }
 
-    resource function post rides/[string rideId]/cancel(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|error {
-        Claims claims = check extractClaims(Authorization);
-        string userId;
-        if claims.userId is string {
-            userId = <string>claims.userId;
-        } else {
+    resource function post rides/[string rideId]/cancel(@http:Header string Authorization) returns http:Ok|http:BadRequest|http:NotFound|http:InternalServerError|error {
+        string? userId = check getUserIdFromHeader(Authorization);
+        if userId is null {
             return <http:BadRequest>{body: "Invalid Token"};
         }
 
-        repository:Ride? ride = check repository:getRideById(rideId);
+        repository:Ride?|error ride = repository:getRideById(rideId);
+        if ride is error {
+            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+        }
         if ride is () {
             return <http:NotFound>{body: types:RIDE_NOT_FOUND};
         }
@@ -231,23 +245,30 @@ service /ride on new http:Listener(PORT) {
         if ride.user_id != userId || ride.status != "RESERVED" {
             return <http:BadRequest>{body: {message: "This ride cannot be canceled."}};
         }
-        decimal basePrice = ps:BASE_PRICE;
-        _ = check repository:updateRide(rideId, {status: repository:CANCELLED, price: basePrice});
+
+        int durationInSeconds = <int>time:utcDiffSeconds(time:utcNow(), <time:Utc>ride.start_time);
+        decimal price = ps:calculatePrice(durationInSeconds, 0);
+        
+        repository:Ride|error updatedRide = repository:updateRide(rideId, {status: repository:CANCELLED, price: price});
+        if updatedRide is error {
+            return <http:InternalServerError>{body: "Failed to cancel ride in DB"};
+        }
+
+        types:PaymentEvent paymentEvent = {
+            rideId: rideId,
+            userId: userId,
+            fare: price.toString()
+        };
+        event_handler:producePaymentEvent(paymentEvent, userId);
+
+        //update this as an event
         _ = check bsc:releaseBike(Authorization, ride.bike_id, endLocation = ride.start_location);
 
-        types:RideCancelEvent cancelEvent = {
-        bike_id: ride.bike_id,
-        ride_id: ride.ride_id,
-        user_id: ride.user_id,
-        start_location: ride.start_location,
-        price: basePrice
-        };
-        check event_handler:produceCancelEvent(cancelEvent);
-
         log:printInfo(`Ride ${rideId} canceled by user ${userId}.`);
-        return <http:Ok>{body: {message: "Ride reservation has been canceled.", price: basePrice}};
+        return <http:Ok>{body: {message: "Ride reservation has been canceled.", price: price}};
     }
 
+    // This should be admin endpoint
     resource function get getRide(string rideId) returns http:Ok|http:NotFound|error {
         repository:Ride? ride = check repository:getRideById(rideId);
         if ride is () {
@@ -258,11 +279,8 @@ service /ride on new http:Listener(PORT) {
 
     resource function get getActiveRide(@http:Header string Authorization) returns
         http:Ok|http:NotFound|http:BadRequest|error {
-        Claims claims = check extractClaims(Authorization);
-        string userId;
-        if claims.userId is string {
-            userId = <string>claims.userId;
-        } else {
+        string? userId = check getUserIdFromHeader(Authorization);
+        if userId is null {
             return <http:BadRequest>{body: "Invalid Token"};
         }
 
@@ -277,10 +295,25 @@ service /ride on new http:Listener(PORT) {
     }
 }
 
-service /rides on new websocket:Listener(27751) {
+@websocket:ServiceConfig {
+    auth: [
+        {
+            jwtValidatorConfig: {
+                issuer: "Orbyte",
+                audience: "vEwzbcasJVQm1jVYHUHCjhxZ4tYa",
+                signatureConfig: {
+                    certFile: pub_key
+                },
+                scopeKey: "scp"
+            },
+            scopes: "user"
+        }
+    ]
+}
+service /rides on new websocket:Listener(WEBSOCKET_PORT) {
 
     function init() {
-        io:println("Websocket Initalized.");
+        io:println("Websocket Initalized for ride pricing.");
     }
 
     resource function get .(string rideId) returns websocket:Service|websocket:UpgradeError {
@@ -292,7 +325,7 @@ service /rides on new websocket:Listener(27751) {
             return error("Ride not found");
         }
         if ride.status != "IN_PROGRESS" && ride.status != "RESERVED" {
-            return error("Ride is not in progess");
+            return error("Ride is not in progress or reserved");
         }
         return new RidePricingService(rideId);
     }
@@ -354,39 +387,5 @@ service class RidePricingService {
         } else {
             log:printWarn(string `Failed to parse message as JSON for ride ${self.rideId}`);
         }
-    }
-}
-
-public function extractClaims(string authHeader) returns Claims|error {
-    int? index = authHeader.indexOf("Bearer ");
-    if index is () {
-        return error("Invalid Authorization header format");
-    }
-
-    string jwtString = authHeader.substring(index + 7);
-
-    var decoded = jwt:decode(jwtString);
-    if decoded is [jwt:Header, jwt:Payload] {
-        jwt:Payload payload = decoded[1];
-        Claims claims = {role: (), userId: (), email: ()};
-
-        // Extract userId
-        if payload["userId"] is string {
-            claims.userId = payload["userId"].toString();
-        }
-
-        // Extract email
-        if payload["sub"] is string {
-            claims.email = payload["sub"];
-        }
-
-        // Extract scopes
-        if (payload["scp"] is string) {
-            claims.role = payload["scp"].toString();
-        }
-
-        return claims;
-    } else if decoded is jwt:Error {
-        return error("JWT decode failed: " + decoded.toString());
     }
 }
