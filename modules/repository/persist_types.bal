@@ -6,10 +6,12 @@
 import ballerina/time;
 
 public enum Status {
+    PENDING,
     RESERVED,
     IN_PROGRESS,
     CANCELLED,
-    ENDED
+    ENDED,
+    FAILED
 }
 
 public type Ride record {|

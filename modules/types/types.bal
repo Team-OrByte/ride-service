@@ -47,6 +47,12 @@ public type RideEndedData record {|
     string fare;
 |};
 
+public type PaymentEvent record {|
+    string rideId;
+    string userId;
+    string fare;
+|};
+
 public const ErrorResponse START_TIME_NULL = {
     code: "RSC-001",
     message: "Start time is null"

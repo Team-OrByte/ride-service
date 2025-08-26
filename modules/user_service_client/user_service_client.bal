@@ -7,6 +7,11 @@ import ballerina/log;
 configurable types:HttpClientConfig userServiceClient = ?;
 configurable cache:CacheConfig userCapabilityCacheConfig = ?;
 
+type Response record {
+    string message;
+    boolean data;
+};
+
 final http:Client httpClient = check new (userServiceClient.url,
     timeout = userServiceClient.timeout,
     circuitBreaker = {
@@ -24,7 +29,7 @@ final http:Client httpClient = check new (userServiceClient.url,
 );
 final cache:Cache userCapabilityCache = new (userCapabilityCacheConfig);
 
-public isolated function userCapability(string userId) returns boolean|error {
+public isolated function userCapability(string userId, @http:Header string Authorization) returns boolean|error {
     if userCapabilityCache.hasKey(userId) {
         any cachedValue = check userCapabilityCache.get(userId);
         if cachedValue is boolean {
@@ -34,7 +39,7 @@ public isolated function userCapability(string userId) returns boolean|error {
     }
 
     log:printInfo("Calling user service... Cache miss for user capability", userId = userId);
-    boolean|error capability = httpClient->/api/checkCapability.post(message = (), userId = userId);
+    Response|error capability = httpClient->/compatibility.get(headers = {"Authorization": Authorization});
 
     if capability is error {
         if userCapabilityCache.hasKey(userId) {
@@ -46,13 +51,13 @@ public isolated function userCapability(string userId) returns boolean|error {
         }
         return error(string `Error checking user capability for User ID: ${userId}`);
     } else {
-        check userCapabilityCache.put(userId, capability);
+        check userCapabilityCache.put(userId, capability.data);
         log:printInfo("User Capability cached.", userId = userId);
-        return capability;
+        return capability.data;
     }
 }
 
-//Note: Should utilize this function in the case of something changed for user in user service that affects the capability
+// Note: Should utilize this function with the event of something changed for user in user service that affects the capability
 public isolated function invalidateCapabilityCache(string userId) returns error? {
     boolean result = userCapabilityCache.hasKey(userId);
     if result is true {
