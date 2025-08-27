@@ -1,10 +1,11 @@
-# Ride Service
+# 🚴 Ride Service
 
-Ride Service is a microservice designed to manage ride operations within a ride-sharing system. It integrates with other services such as User Service and Bike Service, and it communicates with Kafka for asynchronous events.
+Ride Service is a microservice responsible for managing ride lifecycle operations in a ride-sharing system.  
+It integrates with **User Service**, **Bike Service**, **Reward Service**, and publishes **Kafka events** for notifications and payments.
 
 ---
 
-## 🛠 Configuration Format (`config.toml`)
+## 🛠 Configuration (`config.toml`)
 
 ```toml
 [ride_service]
@@ -48,27 +49,233 @@ acks = "all"
 retryCount = 3
 ```
 
-## 🐳 Docker Compose Setup (Kafka + PostgreSQL)
+---
 
-To start the services:
+## 🐳 Docker Compose Setup
+
+Start all dependent services (Kafka, PostgreSQL):
 
 ```bash
 docker-compose up -d
 ```
 
-## 📖 API Endpoints and Functionalities
+---
 
-| HTTP Method | Endpoint               | Description                       |
-| ----------- | ---------------------- | --------------------------------- |
-| `POST`      | `/reserveRide`               | Create a new ride                 |
-| `POST`      | `/rides/{id}/startRide`    | Start a ride                      |
+## 📖 API Endpoints  
 
-### 1. Reserve a Ride
-Endpoint: POST /reserveRide
+### Base URL  
+```
+http://localhost:8082/ride-service
+```
 
-Request Param: String bikeId, String startLocation
+**All endpoints require JWT authentication** (except admin read-only endpoints):  
 
-### 2. Start a Ride
-Endpoint: POST /rides/{id}/startRide
+```
+Authorization: Bearer {token}
+```
 
-Request Param: String rideId
+### 1. Reserve a Ride  
+
+- **Method:** `POST`  
+- **Endpoint:** `/reserveRide`  
+- **Params:** `bikeId`, `startLocation`  
+
+#### Example Request  
+```bash
+curl --request POST \
+  --url "http://localhost:8082/ride-service/reserveRide?bikeId=B101&startLocation=StationA" \
+  --header "Authorization: Bearer {token}" \
+  --header "Content-Type: application/json"
+```
+
+#### Example Response (202 Accepted)  
+```json
+{
+  "message": "You can start the ride.",
+  "rideId": "c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1"
+}
+```
+
+### 2. Start a Ride  
+
+- **Method:** `POST`  
+- **Endpoint:** `/rides/{rideId}/startRide`  
+
+#### Example Request  
+```bash
+curl --request POST \
+  --url "http://localhost:8082/ride-service/rides/c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1/startRide" \
+  --header "Authorization: Bearer {token}" \
+  --header "Content-Type: application/json"
+```
+
+#### Example Response (200 OK)  
+```json
+{
+  "message": "Ride started successfully."
+}
+```
+
+### 3. End a Ride  
+
+- **Method:** `POST`  
+- **Endpoint:** `/rides/{rideId}/end`  
+- **Body:**  
+
+```json
+{
+  "distance": 1200,
+  "end_location": "StationB",
+  "claimReward": true
+}
+```
+
+#### Example Request  
+```bash
+curl --request POST \
+  --url "http://localhost:8082/ride-service/rides/c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1/end" \
+  --header "Authorization: Bearer {token}" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "distance": 1200,
+    "end_location": "StationB",
+    "claimReward": true
+  }'
+```
+
+#### Example Response (200 OK)  
+```json
+{
+  "message": "Ride completed successfully.",
+  "rideId": "c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1",
+  "durationSeconds": 450,
+  "totalPrice": 20.5
+}
+```
+
+### 4. Cancel a Ride  
+
+- **Method:** `POST`  
+- **Endpoint:** `/rides/{rideId}/cancel`  
+
+#### Example Request  
+```bash
+curl --request POST \
+  --url "http://localhost:8082/ride-service/rides/c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1/cancel" \
+  --header "Authorization: Bearer {token}"
+```
+
+#### Example Response (200 OK)  
+```json
+{
+  "message": "Ride reservation has been canceled.",
+  "price": 0
+}
+```
+
+### 5. Get Ride by ID (Admin)  
+
+- **Method:** `GET`  
+- **Endpoint:** `/getRide?rideId={id}`  
+
+#### Example Request  
+```bash
+curl --request GET \
+  --url "http://localhost:8082/ride-service/getRide?rideId=c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1" \
+  --header "Content-Type: application/json"
+```
+
+#### Example Response (200 OK)  
+```json
+{
+  "ride_id": "c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1",
+  "user_id": "user_001",
+  "bike_id": "B101",
+  "status": "ENDED",
+  "start_location": "StationA",
+  "end_location": "StationB",
+  "duration": 450,
+  "price": 20.5
+}
+```
+
+### 6. Get Active Ride for User  
+
+- **Method:** `GET`  
+- **Endpoint:** `/getActiveRide`  
+
+#### Example Request  
+```bash
+curl --request GET \
+  --url "http://localhost:8082/ride-service/getActiveRide" \
+  --header "Authorization: Bearer {token}"
+```
+
+#### Example Response (200 OK)  
+```json
+[
+  {
+    "ride_id": "c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1",
+    "user_id": "user_001",
+    "bike_id": "B101",
+    "status": "IN_PROGRESS",
+    "start_location": "StationA"
+  }
+]
+```
+
+---
+
+## 🔔 WebSocket Ride Pricing  
+
+### Base URL  
+```
+ws://localhost:27770/rides/{rideId}
+```
+
+- **Auth:** JWT required in the WebSocket handshake.  
+- **Description:** Subscribe to **real-time ride pricing updates** for a specific `rideId`.  
+
+#### Example Connection (using `wscat`)  
+```bash
+wscat -c "ws://localhost:27770/rides/c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1" \
+  -H "Authorization: Bearer {token}"
+```
+
+#### Example Client Update → Server  
+```json
+{
+  "duration_seconds": 450,
+  "distance_meters": 1200
+}
+```
+
+#### Example Server Response (Price Update)  
+```json
+{
+  "current_price": 20.5
+}
+```
+
+---
+
+## 📨 Kafka Event Integration  
+
+- **Ride Notifications Topic:** `ride-events`  
+  - Event Types: `RIDE_STARTED`, `RIDE_ENDED`  
+  - Payload: `userId`, `rideId`, `bikeId`, `startStation` / `endStation`, `duration`, `fare`  
+
+- **Payment Events Topic:** `payment-events`  
+  - Payload: `rideId`, `userId`, `fare`  
+
+The ride service **publishes Kafka events** for ride start/end and payments which can be consumed by the Notification Service or other downstream systems.
+
+---
+
+## ⚠️ Error Handling  
+
+| Status | Description |
+| ------ | ----------- |
+| 400 | Invalid request, missing parameters, or unauthorized operation |
+| 404 | Ride not found or ride in invalid state |
+| 500 | Internal server errors such as DB or service failures |
