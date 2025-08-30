@@ -8,6 +8,7 @@ import ride_service.user_service_client as usc;
 
 import ballerina/http;
 import ballerina/io;
+import ballerina/jwt;
 import ballerina/log;
 import ballerina/time;
 import ballerina/uuid;
@@ -101,7 +102,7 @@ service /ride\-service on new http:Listener(PORT) {
             return <http:InternalServerError>{body: "Failed to mark ride as RESERVED. Bike released."};
         }
         log:printInfo(`Ride ${rideId} updated to RESERVED`);
-        
+
         return <http:Accepted>{
             body: {
                 message: "You can start the ride.",
@@ -118,7 +119,7 @@ service /ride\-service on new http:Listener(PORT) {
 
         repository:Ride?|error ride = check repository:getRideById(rideId);
         if ride is error {
-            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+            return <http:InternalServerError>{body: string `Failed to fetch ${rideId} from DB`};
         }
         if ride is () {
             return <http:NotFound>{body: {message: types:RIDE_NOT_FOUND}};
@@ -157,7 +158,7 @@ service /ride\-service on new http:Listener(PORT) {
 
         repository:Ride?|error ride = repository:getRideById(rideId);
         if ride is error {
-            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+            return <http:InternalServerError>{body: string `Failed to fetch ${rideId} from DB`};
         }
         if ride is () || ride.start_time is () {
             return <http:NotFound>{body: {message: "Ride not found or not started.", rideId: rideId}};
@@ -170,7 +171,7 @@ service /ride\-service on new http:Listener(PORT) {
         time:Utc endTime = time:utcNow();
         int durationInSeconds = <int>time:utcDiffSeconds(endTime, <time:Utc>ride.start_time);
         decimal price = ps:calculatePrice(durationInSeconds, <int>endRequest.distance);
-        
+
         repository:RideUpdate rideUpdate = {
             end_time: endTime,
             duration: durationInSeconds,
@@ -236,7 +237,7 @@ service /ride\-service on new http:Listener(PORT) {
 
         repository:Ride?|error ride = repository:getRideById(rideId);
         if ride is error {
-            return <http:InternalServerError>{body: string`Failed to fetch ${rideId} from DB`};
+            return <http:InternalServerError>{body: string `Failed to fetch ${rideId} from DB`};
         }
         if ride is () {
             return <http:NotFound>{body: types:RIDE_NOT_FOUND};
@@ -248,7 +249,7 @@ service /ride\-service on new http:Listener(PORT) {
 
         int durationInSeconds = <int>time:utcDiffSeconds(time:utcNow(), <time:Utc>ride.start_time);
         decimal price = ps:calculatePrice(durationInSeconds, 0);
-        
+
         repository:Ride|error updatedRide = repository:updateRide(rideId, {status: repository:CANCELLED, price: price});
         if updatedRide is error {
             return <http:InternalServerError>{body: "Failed to cancel ride in DB"};
@@ -295,28 +296,29 @@ service /ride\-service on new http:Listener(PORT) {
     }
 }
 
-@websocket:ServiceConfig {
-    auth: [
-        {
-            jwtValidatorConfig: {
-                issuer: "Orbyte",
-                audience: "vEwzbcasJVQm1jVYHUHCjhxZ4tYa",
-                signatureConfig: {
-                    certFile: pub_key
-                },
-                scopeKey: "scp"
-            },
-            scopes: "user"
-        }
-    ]
-}
 service /rides on new websocket:Listener(WEBSOCKET_PORT) {
 
     function init() {
         io:println("Websocket Initalized for ride pricing.");
     }
 
-    resource function get .(string rideId) returns websocket:Service|websocket:UpgradeError {
+    resource function get .(string rideId, http:Request req) returns websocket:Service|websocket:UpgradeError {
+        string? token = req.getQueryParamValue("token");
+        if token is () {
+            return error("Missing token");
+        }
+        jwt:ValidatorConfig validatorConfig = {
+            issuer: "Orbyte",
+            audience: "vEwzbcasJVQm1jVYHUHCjhxZ4tYa",
+            signatureConfig: {
+                certFile: pub_key
+            }
+        };
+        jwt:Payload|error payload = jwt:validate(token, validatorConfig);
+        if payload is error {
+            return error("JWT validation error : ", payload);
+        }
+
         repository:Ride?|error ride = repository:getRideById(rideId);
         if ride is error {
             return error(ride.message());
