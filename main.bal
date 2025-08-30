@@ -302,11 +302,7 @@ service /rides on new websocket:Listener(WEBSOCKET_PORT) {
         io:println("Websocket Initalized for ride pricing.");
     }
 
-    resource function get .(string rideId, http:Request req) returns websocket:Service|websocket:UpgradeError {
-        string? token = req.getQueryParamValue("token");
-        if token is () {
-            return error("Missing token");
-        }
+    resource function get .(string rideId, string token) returns websocket:Service|websocket:UpgradeError {
         jwt:ValidatorConfig validatorConfig = {
             issuer: "Orbyte",
             audience: "vEwzbcasJVQm1jVYHUHCjhxZ4tYa",

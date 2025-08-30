@@ -21,8 +21,9 @@ public isolated function produceRideNotifEvent(anydata newRideEvent, string user
     });
     if result is kafka:Error {
         log:printError("Error occured while publishing ride notification event.", err = result.message());
+    } else {
+        log:printInfo("Ride notif event published", event = newRideEvent.toJsonString());
     }
-    log:printInfo("Ride notif event published", event = newRideEvent.toJsonString());
 }
 
 public isolated function producePaymentEvent(anydata newRideEvent, string userId) {
@@ -33,6 +34,7 @@ public isolated function producePaymentEvent(anydata newRideEvent, string userId
     });
     if result is kafka:Error {
         log:printError("Error occured while publishing payment event.", err = result.message());
+    } else {
+        log:printInfo("Payment event published", event = newRideEvent.toJsonString());
     }
-    log:printInfo("Payment event published", event = newRideEvent.toJsonString());
 }
