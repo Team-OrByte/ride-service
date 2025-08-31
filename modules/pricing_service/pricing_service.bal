@@ -1,4 +1,4 @@
-public final decimal BASE_PRICE = 100;
+public final decimal BASE_PRICE = 300;
 final decimal PRICE_PER_KM = 15;
 final decimal PRICE_PER_MINUTE = 5;
 final decimal METERS_PER_KM = 1000.00;
