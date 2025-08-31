@@ -22,15 +22,15 @@ database = "ride_service_db"
 
 [ride_service.user_service_client.userServiceClient]
 url = "http://user_service/"
-timeout = 90.0
+timeout = 120.0
 
 [ride_service.bike_service_client.bikeServiceClient]
-url = "http://localhost:8090/bike-service"
-timeout = 90.0
+url = "http://bike-service/"
+timeout = 120.0
 
 [ride_service.reward_service_client.rewardServiceClient]
-url = "http://localhost:8091/"
-timeout = 90.0
+url = "http://reward-service/"
+timeout = 120.0
 
 [ride_service.user_service_client.userCapabilityCacheConfig]
 capacity = 1000
@@ -230,16 +230,15 @@ curl --request GET \
 
 ### Base URL  
 ```
-ws://localhost:27770/rides/{rideId}
+ws://localhost:27770/rides?rideId={rideId}&token={token}
 ```
 
 - **Auth:** JWT required in the WebSocket handshake.  
-- **Description:** Subscribe to **real-time ride pricing updates** for a specific `rideId`.  
+- **Description:** Subscribe to **real-time ride pricing updates** for a specific `rideId` after validated using `token`.  
 
 #### Example Connection (using `wscat`)  
 ```bash
-wscat -c "ws://localhost:27770/rides/c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1" \
-  -H "Authorization: Bearer {token}"
+wscat -c "ws://localhost:27770/rides?rideId=c14e4c9e-1234-45c7-88a9-90f8e1b9c6a1&token=auth_token"
 ```
 
 #### Example Client Update → Server  
